@@ -153,3 +153,21 @@ rules:
 {{- if .Values.operator.cleanupCRD }}
   - delete
 {{- end }}
+- apiGroups:
+  - maintenance.nvidia.com
+  resources:
+  - nodemaintenances
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - maintenance.nvidia.com
+  resources:
+  - nodemaintenances/status
+  verbs:
+  - get

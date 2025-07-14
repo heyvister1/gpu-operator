@@ -29,6 +29,13 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 
+	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
+	clusterpolicyv1 "github.com/NVIDIA/gpu-operator/api/nvidia/v1"
+	nvidiav1alpha1 "github.com/NVIDIA/gpu-operator/api/nvidia/v1alpha1"
+	"github.com/NVIDIA/gpu-operator/controllers"
+	"github.com/NVIDIA/gpu-operator/controllers/clusterinfo"
+	"github.com/NVIDIA/gpu-operator/internal/consts"
+	"github.com/NVIDIA/gpu-operator/internal/info"
 	"github.com/NVIDIA/k8s-operator-libs/pkg/upgrade"
 	apiconfigv1 "github.com/openshift/api/config/v1"
 	apiimagev1 "github.com/openshift/api/image/v1"
@@ -45,13 +52,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
-
-	clusterpolicyv1 "github.com/NVIDIA/gpu-operator/api/nvidia/v1"
-	nvidiav1alpha1 "github.com/NVIDIA/gpu-operator/api/nvidia/v1alpha1"
-	"github.com/NVIDIA/gpu-operator/controllers"
-	"github.com/NVIDIA/gpu-operator/controllers/clusterinfo"
-	"github.com/NVIDIA/gpu-operator/internal/consts"
-	"github.com/NVIDIA/gpu-operator/internal/info"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -69,6 +69,7 @@ func init() {
 	utilruntime.Must(secv1.Install(scheme))
 	utilruntime.Must(apiconfigv1.Install(scheme))
 	utilruntime.Must(apiimagev1.Install(scheme))
+	utilruntime.Must(maintenancev1alpha1.AddToScheme(scheme))
 }
 
 func main() {
@@ -152,10 +153,12 @@ func main() {
 	// setup upgrade controller
 	upgrade.SetDriverName("gpu")
 	upgradeLogger := ctrl.Log.WithName("controllers").WithName("Upgrade")
+	requestorOpts := upgrade.GetRequestorOptsFromEnvs()
 	clusterUpgradeStateManager, err := upgrade.NewClusterUpgradeStateManager(
 		upgradeLogger,
 		mgr.GetConfig(),
 		mgr.GetEventRecorderFor("nvidia-gpu-operator"),
+		upgrade.StateOptions{Requestor: requestorOpts},
 	)
 	if err != nil {
 		setupLog.Error(err, "unable to create new ClusterUpdateStateManager", "controller", "Upgrade")

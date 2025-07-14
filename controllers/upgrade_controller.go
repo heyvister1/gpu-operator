@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -43,6 +44,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	maintenancev1alpha1 "github.com/Mellanox/maintenance-operator/api/v1alpha1"
 	gpuv1 "github.com/NVIDIA/gpu-operator/api/nvidia/v1"
 	nvidiav1alpha1 "github.com/NVIDIA/gpu-operator/api/nvidia/v1alpha1"
 )
@@ -62,7 +64,7 @@ const (
 	// DriverLabelValue indicates pod label value of the driver
 	DriverLabelValue = "nvidia-driver-daemonset"
 	// UpgradeSkipDrainLabelSelector indicates the pod selector label to skip with drain
-	UpgradeSkipDrainLabelSelector = "nvidia.com/gpu-driver-upgrade-drain.skip!=true"
+	UpgradeSkipDrainLabelSelector = "nvidia.com/ofed-driver-upgrade-drain.skip!=true,nvidia.com/gpu-driver-upgrade-drain.skip!=true"
 	// AppComponentLabelKey indicates the label key of the component
 	AppComponentLabelKey = "app.kubernetes.io/component"
 	// AppComponentLabelValue indicates the label values of the nvidia-gpu-driver component
@@ -154,7 +156,7 @@ func (r *UpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	reqLogger.Info("Propagate state to state manager")
 	reqLogger.V(consts.LogLevelDebug).Info("Current cluster upgrade state", "state", state)
 
-	totalNodes := r.StateManager.GetTotalManagedNodes(ctx, state)
+	totalNodes := r.StateManager.GetTotalManagedNodes(state)
 	maxUnavailable := totalNodes
 	if clusterPolicy.Spec.Driver.UpgradePolicy != nil && clusterPolicy.Spec.Driver.UpgradePolicy.MaxUnavailable != nil {
 		maxUnavailable, err = intstr.GetScaledValueFromIntOrPercent(clusterPolicy.Spec.Driver.UpgradePolicy.MaxUnavailable, totalNodes, true)
@@ -177,11 +179,11 @@ func (r *UpgradeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// log metrics with the current state
 	if clusterPolicyCtrl.operatorMetrics != nil {
-		clusterPolicyCtrl.operatorMetrics.upgradesInProgress.Set(float64(r.StateManager.GetUpgradesInProgress(ctx, state)))
-		clusterPolicyCtrl.operatorMetrics.upgradesDone.Set(float64(r.StateManager.GetUpgradesDone(ctx, state)))
-		clusterPolicyCtrl.operatorMetrics.upgradesAvailable.Set(float64(r.StateManager.GetUpgradesAvailable(ctx, state, clusterPolicy.Spec.Driver.UpgradePolicy.MaxParallelUpgrades, maxUnavailable)))
-		clusterPolicyCtrl.operatorMetrics.upgradesFailed.Set(float64(r.StateManager.GetUpgradesFailed(ctx, state)))
-		clusterPolicyCtrl.operatorMetrics.upgradesPending.Set(float64(r.StateManager.GetUpgradesPending(ctx, state)))
+		clusterPolicyCtrl.operatorMetrics.upgradesInProgress.Set(float64(r.StateManager.GetUpgradesInProgress(state)))
+		clusterPolicyCtrl.operatorMetrics.upgradesDone.Set(float64(r.StateManager.GetUpgradesDone(state)))
+		clusterPolicyCtrl.operatorMetrics.upgradesAvailable.Set(float64(r.StateManager.GetUpgradesAvailable(state, clusterPolicy.Spec.Driver.UpgradePolicy.MaxParallelUpgrades, maxUnavailable)))
+		clusterPolicyCtrl.operatorMetrics.upgradesFailed.Set(float64(r.StateManager.GetUpgradesFailed(state)))
+		clusterPolicyCtrl.operatorMetrics.upgradesPending.Set(float64(r.StateManager.GetUpgradesPending(state)))
 	}
 
 	err = r.StateManager.ApplyState(ctx, state, clusterPolicy.Spec.Driver.UpgradePolicy)
@@ -288,6 +290,53 @@ func (r *UpgradeReconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manag
 
 		if !ownedByNVIDIA {
 			return nil
+		}
+
+		// Conditionally add Watches for NodeMaintenance if UseMaintenanceOperator is true
+		requestorOpts := upgrade.GetRequestorOptsFromEnvs()
+		if requestorOpts.UseMaintenanceOperator {
+			// Create a properly typed predicate for NodeMaintenance
+			nodeMaintenancePredicate := predicate.TypedFuncs[*maintenancev1alpha1.NodeMaintenance]{
+				UpdateFunc: func(e event.TypedUpdateEvent[*maintenancev1alpha1.NodeMaintenance]) bool {
+					// Use the existing ConditionChangedPredicate logic
+					condPred := upgrade.NewConditionChangedPredicate(mgr.GetLogger(),
+						requestorOpts.MaintenanceOPRequestorID)
+
+					// Convert to the untyped event format that the original predicate expects
+					untypedEvent := event.UpdateEvent{
+						ObjectOld: e.ObjectOld,
+						ObjectNew: e.ObjectNew,
+					}
+
+					return condPred.Update(untypedEvent)
+				},
+			}
+			// Create a properly typed predicate for NodeMaintenance
+			requestorIDPredicate := predicate.TypedFuncs[*maintenancev1alpha1.NodeMaintenance]{
+				UpdateFunc: func(e event.TypedUpdateEvent[*maintenancev1alpha1.NodeMaintenance]) bool {
+					// Use the existing ConditionChangedPredicate logic
+					condPred := upgrade.NewRequestorIDPredicate(mgr.GetLogger(),
+						requestorOpts.MaintenanceOPRequestorID)
+
+					// Convert to the untyped event format that the original predicate expects
+					untypedEvent := event.UpdateEvent{
+						ObjectOld: e.ObjectOld,
+						ObjectNew: e.ObjectNew,
+					}
+
+					return condPred.Update(untypedEvent)
+				},
+			}
+
+			err = c.Watch(
+				source.Kind(
+					mgr.GetCache(),
+					&maintenancev1alpha1.NodeMaintenance{},
+					&handler.TypedEnqueueRequestForObject[*maintenancev1alpha1.NodeMaintenance]{},
+					nodeMaintenancePredicate, requestorIDPredicate,
+				),
+			)
+
 		}
 
 		return getClusterPoliciesToReconcile(ctx, mgr.GetClient())

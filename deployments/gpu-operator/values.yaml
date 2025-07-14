@@ -6,7 +6,7 @@ platform:
   openshift: false
 
 nfd:
-  enabled: true
+  enabled: false
   nodefeaturerules: false
 
 psa:
@@ -19,6 +19,10 @@ cdi:
 sandboxWorkloads:
   enabled: false
   defaultWorkload: "container"
+
+maintenanceOperator:
+  # -- Maintenance Operator is deployed
+  enabled: true
 
 hostPaths:
   # rootFS represents the path to the root filesystem of the host.
@@ -79,6 +83,12 @@ operator:
   # upgrade CRD on chart upgrade, requires --disable-openapi-validation flag
   # to be passed during helm upgrade.
   upgradeCRD: true
+  # -- Enable the use of maintenance operator upgrade logic.
+  maintenanceOperator:
+    useRequestor: true
+    requestorID: "nvidia.gpu.operator"
+    nodeMaintenanceNamePrefix: ""
+    nodeMaintenanceNamespace: default  
   initContainer:
     image: cuda
     repository: nvcr.io/nvidia
